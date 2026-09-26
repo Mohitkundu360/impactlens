@@ -1,0 +1,301 @@
+// ImpactLens — Prisma schema
+// Implements the revised Phase 1 architecture:
+//  - every AI artifact carries explicit provenance (model/version/timestamp)
+//  - Observed vs. AI Interpretation are separate fields, never merged
+//  - Report evidence is relational (ReportMedia / ReportComparison), not JSON blobs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum ProjectType {
+  ENVIRONMENTAL_RESTORATION
+  INFRASTRUCTURE
+  COMMUNITY_DEVELOPMENT
+  SUSTAINABILITY_CAMPAIGN
+  OTHER
+}
+
+enum ResourceType {
+  IMAGE
+  VIDEO
+}
+
+enum MediaPhase {
+  BEFORE
+  DURING
+  AFTER
+  UNSPECIFIED
+}
+
+enum MediaStatus {
+  UPLOADED
+  PROCESSING
+  ANALYZED
+  FAILED
+  INDEXED
+}
+
+enum JobType {
+  IMAGE_ANALYSIS
+  VIDEO_ANALYSIS_FRAME
+  VIDEO_ANALYSIS_NATIVE
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ModelProvider {
+  GEMINI
+  CLOUDINARY_AI_VISION
+  CLOUDINARY_AI_VIDEO_ANALYSIS
+}
+
+enum TagSource {
+  AI
+  MANUAL
+}
+
+// ---------- Core entities ----------
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  projects       Project[]      @relation("ProjectCreatedBy")
+  uploadedMedia  MediaAsset[]   @relation("MediaUploadedBy")
+  comparisons    ComparisonPair[] @relation("ComparisonCreatedBy")
+  reports        Report[]       @relation("ReportGeneratedBy")
+}
+
+model Project {
+  id            String      @id @default(cuid())
+  name          String
+  description   String?
+  locationText  String?
+  latitude      Float?
+  longitude     Float?
+  projectType   ProjectType @default(OTHER)
+  createdById   String
+  createdBy     User        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime    @default(now())
+
+  media           MediaAsset[]
+  comparisonPairs ComparisonPair[]
+  reports         Report[]
+
+  @@index([createdById])
+}
+
+model MediaAsset {
+  id                  String       @id @default(cuid())
+  projectId           String
+  project             Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Cloudinary provenance — both IDs kept: public_id for delivery URLs / readability,
+  // asset_id because Cloudinary AI Vision / AI Video Analysis address assets by asset_id.
+  cloudinaryPublicId  String       @unique
+  cloudinaryAssetId   String?
+  cloudinaryUrl       String
+  cloudinarySecureUrl String
+
+  resourceType   ResourceType
+  format         String?
+  bytes          Int?
+  width          Int?
+  height         Int?
+  durationSeconds Float?
+
+  phase          MediaPhase   @default(UNSPECIFIED)
+  activityLabel  String?      // denormalized from AnalysisResult.activity, for fast filtering
+  capturedAt     DateTime?
+  locationText   String?
+
+  status         MediaStatus  @default(UPLOADED)
+
+  uploadedById   String
+  uploadedBy     User         @relation("MediaUploadedBy", fields: [uploadedById], references: [id])
+  createdAt      DateTime     @default(now())
+
+  analysis         AnalysisResult?
+  videoScenes      VideoScene[]
+  tags             MediaTag[]
+  processingJobs   ProcessingJob[]
+  comparisonsBefore ComparisonPair[] @relation("ComparisonBefore")
+  comparisonsAfter  ComparisonPair[] @relation("ComparisonAfter")
+  reportEntries     ReportMedia[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([phase])
+  @@index([activityLabel])
+}
+
+// ---------- AI analysis & provenance ----------
+
+model AnalysisResult {
+  id            String   @id @default(cuid())
+  mediaAssetId  String   @unique
+  mediaAsset    MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  description   String
+  activity      String?
+  environment   String?
+  objects       Json     @default("[]")
+  observations  Json     @default("[]")
+  sustainabilityCategories Json @default("[]")
+  confidence    Float?
+
+  // Three-level AI output model — "observed" and "interpretation" are distinct
+  // fields on purpose. There is deliberately no "impact claim" field: nothing
+  // in this schema can hold an unsupported quantitative/scientific claim.
+  observedSummary        String
+  interpretationSummary  String
+
+  rawModelResponse Json
+
+  modelProvider ModelProvider
+  modelName     String
+  modelVersion  String?
+  generatedAt   DateTime
+
+  createdAt     DateTime @default(now())
+}
+
+model VideoScene {
+  id            String   @id @default(cuid())
+  mediaAssetId  String
+  mediaAsset    MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  startSeconds  Float
+  endSeconds    Float
+  description   String
+
+  modelProvider ModelProvider @default(CLOUDINARY_AI_VIDEO_ANALYSIS)
+  modelName     String?
+  generatedAt   DateTime      @default(now())
+
+  @@index([mediaAssetId])
+}
+
+model Tag {
+  id     String    @id @default(cuid())
+  name   String    @unique
+  source TagSource @default(AI)
+
+  media MediaTag[]
+}
+
+model MediaTag {
+  mediaAssetId String
+  tagId        String
+  mediaAsset   MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+  tag          Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([mediaAssetId, tagId])
+}
+
+model ProcessingJob {
+  id            String    @id @default(cuid())
+  mediaAssetId  String
+  mediaAsset    MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  jobType       JobType
+  status        JobStatus @default(QUEUED)
+  attempts      Int       @default(0)
+  errorMessage  String?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([mediaAssetId])
+}
+
+// ---------- Before / After ----------
+
+model ComparisonPair {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  beforeMediaId String
+  beforeMedia   MediaAsset @relation("ComparisonBefore", fields: [beforeMediaId], references: [id])
+  afterMediaId  String
+  afterMedia    MediaAsset @relation("ComparisonAfter", fields: [afterMediaId], references: [id])
+
+  observedSummary       String?
+  interpretationSummary String?
+  disclaimer    String   @default("AI observation of visible content, not a verified measurement.")
+
+  modelProvider ModelProvider?
+  modelName     String?
+  modelVersion  String?
+  generatedAt   DateTime?
+
+  createdById   String
+  createdBy     User     @relation("ComparisonCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+
+  reportEntries ReportComparison[]
+
+  @@unique([projectId, beforeMediaId, afterMediaId])
+  @@index([projectId])
+}
+
+// ---------- Reports ----------
+
+model Report {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title       String
+  summary     String   // AI-generated narrative paragraph only — evidence lists below are relational/deterministic
+  summarySource String @default("ai") // "ai" | "fallback_flagged" | "fallback_no_media" — see lib/ai/reportSummary.ts
+
+  generatedById String
+  generatedBy   User    @relation("ReportGeneratedBy", fields: [generatedById], references: [id])
+  generatedAt   DateTime @default(now())
+
+  media        ReportMedia[]
+  comparisons  ReportComparison[]
+
+  @@index([projectId])
+}
+
+model ReportMedia {
+  reportId     String
+  mediaAssetId String
+  sortOrder    Int    @default(0)
+
+  report       Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, mediaAssetId])
+}
+
+model ReportComparison {
+  reportId          String
+  comparisonPairId  String
+  sortOrder         Int    @default(0)
+
+  report         Report         @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  comparisonPair ComparisonPair @relation(fields: [comparisonPairId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, comparisonPairId])
+}
