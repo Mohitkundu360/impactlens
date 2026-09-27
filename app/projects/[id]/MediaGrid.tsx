@@ -45,11 +45,35 @@ export default function MediaGrid({ projectId, initialMedia }: Props) {
   }, [media, projectId]);
 
   async function handleRetry(id: string) {
-    setRetrying(id);
-    await fetch(`/api/media/${id}/retry`, { method: "POST" });
-    setMedia((prev) => prev.map((m) => (m.id === id ? { ...m, status: "UPLOADED" } : m)));
+  setRetrying(id);
+
+  try {
+    const retryRes = await fetch(`/api/media/${id}/retry`, {
+      method: "POST"
+    });
+
+    if (!retryRes.ok) {
+      const body = await retryRes.json().catch(() => ({}));
+      throw new Error(body.error ?? "Failed to retry media.");
+    }
+
+    setMedia((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, status: "UPLOADED" } : m))
+    );
+
+    const processRes = await fetch("/api/jobs/process", {
+      method: "POST"
+    });
+
+    if (!processRes.ok) {
+      console.warn(`Processing could not start for media ${id}.`);
+    }
+  } catch (error) {
+    console.error("Failed to retry media:", error);
+  } finally {
     setRetrying(null);
   }
+}
 
   if (media.length === 0) {
     return <p className="text-slate-400 text-sm">No media uploaded yet.</p>;

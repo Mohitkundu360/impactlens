@@ -93,6 +93,16 @@ export default function UploadWidget({ projectId }: Props) {
     if (!registerRes.ok) {
       throw new Error(`Uploaded to Cloudinary but failed to register ${file.name}.`);
     }
+
+    // 4. Process the queued job through the serverless endpoint.
+    setProgressLabel(`Analyzing ${file.name}…`);
+    const processRes = await fetch("/api/jobs/process", {
+      method: "POST"
+    });
+
+    if (!processRes.ok) {
+      console.warn(`Processing could not start for ${file.name}.`);
+    }
   }
 
   return (
@@ -127,4 +137,5 @@ export default function UploadWidget({ projectId }: Props) {
       </p>
     </div>
   );
-}
+  }
+
