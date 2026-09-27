@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "worker": "tsx worker/index.ts",
@@ -41,3 +41,4 @@
     "prisma@5.22.0": true
   }
 }
+
