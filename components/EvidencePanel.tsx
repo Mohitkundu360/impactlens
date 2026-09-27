@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { optimizedImageUrl } from "@/lib/cloudinaryUrl";
 
 interface EvidenceData {
   media: {
@@ -73,7 +74,7 @@ export default function EvidencePanel({ mediaId, onClose }: Props) {
             <div className="aspect-video bg-slate-100 rounded overflow-hidden">
               {data.media.resourceType === "IMAGE" ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={data.media.cloudinarySecureUrl} alt="" className="w-full h-full object-contain" />
+                <img src={optimizedImageUrl(data.media.cloudinarySecureUrl, { width: 800 })} alt={data.analysis?.activity ?? "Uploaded media"} className="w-full h-full object-contain" />
               ) : (
                 <video src={data.media.cloudinarySecureUrl} controls className="w-full h-full" />
               )}
